@@ -477,7 +477,7 @@ public:
 		if(parent != INVALID_IDX){
 			child_[parent].left == node ? child_[parent].left = right : child_[parent].right = right;
 		}
-		else root_=node;
+		else root_=right;
 
 		set_parent(right, parent);
 
