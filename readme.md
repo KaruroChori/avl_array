@@ -1,3 +1,13 @@
+# Addendum
+This is a modified version of the AVL array implementation which uses dynamic memory and allows the container to be resized.
+- I encountered an annoying bug when deleting the root node. I fixed it hopefully, and this should also be reflected in the master branch.
+- It now has some dependencies from the standard library but they can be all removed and are only related to debug functions.
+- It uses dynamic memory.
+- I can now sample uniformely objects from the array. Yes yes I should not be using rand(). Nevermind.
+- Explicit constexpr for template dependent if blocks. In general I am using all the features avilable in c++17.
+- The testsuite has been adapted to fit the new interface but some tests should be modified to reflect the new features (and that is the reason why some are failing I guess).
+Comments and indentation are not on par with the original branch, sorry but I am on a strict schedule :).
+
 # AVL Array container class
 
 [![Build Status](https://travis-ci.org/mpaland/avl_array.svg?branch=master)](https://travis-ci.org/mpaland/avl_array)

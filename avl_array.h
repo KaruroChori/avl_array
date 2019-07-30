@@ -43,15 +43,21 @@
 
 #include <cstdint>
 
+#include <cmath>
+#include <iostream>
+#include <stack>
+
+
+//TODO: maybe the cache advantage we get by packing the bits for the balance is higher than the additional time required to read them. Try to compactify it.
+//
 
 /**
  * \param Key The key type. The type (class) must provide a 'less than' and 'equal to' operator
  * \param T The Data type
  * \param size_type Container size type
- * \param Size Container size
  * \param Fast If true every node stores an extra parent index. This increases memory but speed up insert/erase by factor 10
  */
-template<typename Key, typename T, typename size_type, const size_type Size, const bool Fast = true>
+template<typename Key, typename T, typename size_type, const bool Fast = true>
 class avl_array
 {
   // child index pointer class
@@ -60,17 +66,30 @@ class avl_array
     size_type right;
   } child_type;
 
+  //Bitfield for balance, elements left, elemets right
+  typedef int8_t balance_t;
+
   // node storage, due to possible structure packing effects, single arrays are used instead of a 'node' structure 
-  Key         key_[Size];                 // node key
+  /*Key         key_[Size];                 // node key
   T           val_[Size];                 // node value
   std::int8_t balance_[Size];             // subtree balance
   child_type  child_[Size];               // node childs
   size_type   size_;                      // actual size
   size_type   root_;                      // root node
-  size_type   parent_[Fast ? Size : 1];   // node parent, use one element if not needed (zero sized array is not allowed)
+  size_type   parent_[Fast ? Size : 1];   // node parent, use one element if not needed (zero sized array is not allowed)*/
+ 
+  size_type   Size;
+  Key         *key_;                 // node key
+  T           *val_;                 // node value
+  balance_t   *balance_;             // subtree balance
+  child_type  *child_;               // node childs
+  size_type   size_;                      // actual size
+  size_type   root_;                      // root node
+  size_type   *parent_;   // node parent, use one element if not needed (zero sized array is not allowed)
  
   // invalid index (like 'nullptr' in a pointer implementation)
-  static const size_type INVALID_IDX = Size;
+  //static const size_type INVALID_IDX = Size;
+  size_type INVALID_IDX = Size;
 
   // iterator class
   typedef class tag_avl_array_iterator
@@ -116,7 +135,7 @@ class avl_array
     tag_avl_array_iterator& operator++()
     {
       // end reached?
-      if (idx_ >= Size) {
+      if (idx_ >= instance_->Size) {
         return *this;
       }
       // take left most child of right child, if not existent, take parent
@@ -167,11 +186,78 @@ public:
 
 
   // ctor
-  avl_array()
-    : size_(0U)
-    , root_(Size)
-  { }
+  avl_array(size_type s=1)
+    : Size(s),
+      size_(0U),
+      root_(Size)
+  {
+	key_=new Key[Size];
+	val_=new T[Size];
+	balance_=new balance_t[Size];
+	child_=new child_type[Size];
+	parent_=new size_type[Fast ? Size : 1];
+  }
+  
+  ~avl_array(){
+		delete[] key_;
+		delete[] val_;
+		delete[] balance_;
+		delete[] child_;
+		delete[] parent_;
+	}
 
+  void resize(size_type s){
+	if(s>=size_){
+		auto* okey_=new Key[s];
+		auto* oval_=new T[s];
+		auto* obalance_=new balance_t[s];
+		auto* ochild_=new child_type[s];
+		auto* oparent_=new size_type[Fast ? s : 1];
+		
+		//Perfect copy
+		for(size_type i=0;i<size_;i++){
+			okey_[i]=key_[i];
+			oval_[i]=val_[i];
+			obalance_[i]=balance_[i];
+		}
+		
+		if constexpr(!Fast){
+			for(size_type i=0;i<size_;i++){
+				ochild_[i]=child_[i];
+				if(ochild_[i].left==INVALID_IDX)ochild_[i].left=s;
+				if(ochild_[i].right==INVALID_IDX)ochild_[i].right=s;
+			}
+			oparent_[0]=parent_[0];
+			if(oparent_[0]==INVALID_IDX)oparent_[0]=s;
+		}
+		else{
+			for(size_type i=0;i<size_;i++){
+				ochild_[i]=child_[i];
+				oparent_[i]=parent_[i];
+				if(ochild_[i].left==INVALID_IDX)ochild_[i].left=s;
+				if(ochild_[i].right==INVALID_IDX)ochild_[i].right=s;
+				if(oparent_[i]==INVALID_IDX)oparent_[i]=s;
+			}
+		}
+		
+		if(root_==INVALID_IDX)root_=s;
+		
+		delete[] key_;
+		delete[] val_;
+		delete[] balance_;
+		delete[] child_;
+		delete[] parent_;
+		
+		key_=okey_;
+		val_=oval_;
+		balance_=obalance_;
+		child_=ochild_;
+		parent_=oparent_;
+		
+		Size=s;
+		INVALID_IDX=Size;
+	}
+  }
 
   // iterators
   inline iterator begin()
@@ -208,6 +294,9 @@ public:
     root_ = INVALID_IDX;
   }
 
+  inline iterator sample(){
+	return iterator(this,rand()%size_);  
+  }
 
   /**
    * Insert or update an element
@@ -217,6 +306,8 @@ public:
    */
   bool insert(const key_type& key, const value_type& val)
   {
+	if(size_+1>Size)resize(size_*2);
+	
     if (root_ == INVALID_IDX) {
       key_[size_]     = key;
       val_[size_]     = val;
@@ -355,6 +446,9 @@ public:
     if (empty() || (position == end())) {
       return false;
     }
+    
+    //There is some headroom and hysteresis there to ensure no crazy allocation chains occour.
+    if(size_<Size/3+1)resize(Size/2);
 
     const size_type node  = position.idx_;
     const size_type left  = child_[node].left;
@@ -378,17 +472,25 @@ public:
         }
       }
       else {
-        const size_type parent = get_parent(node);
-        child_[parent].left == node ? child_[parent].left = right : child_[parent].right = right;
+		const size_type parent = get_parent(node);
+		////BUGFIX HERE
+		if(parent != INVALID_IDX){
+			child_[parent].left == node ? child_[parent].left = right : child_[parent].right = right;
+		}
+		else root_=node;
 
-        set_parent(right, parent);
+		set_parent(right, parent);
 
-        delete_balance(right, 0);
+		delete_balance(right, 0);
       }
     }
     else if (right == INVALID_IDX) {
       const size_type parent = get_parent(node);
-      child_[parent].left == node ? child_[parent].left = left : child_[parent].right = left;
+      ////BUGFIX HERE
+      if(parent != INVALID_IDX){
+         child_[parent].left == node ? child_[parent].left = left : child_[parent].right = left;
+      }
+      else root_=left;
 
       set_parent(left, parent);
 
@@ -438,7 +540,7 @@ public:
         set_parent(left, successor);
         child_[successor].left  = left;
         child_[successor].right = right;
-        balance_[successor]     = balance_[node];
+        balance_[successor]   = balance_[node];
 
         if (node == root_) {
           root_ = successor;
@@ -521,6 +623,24 @@ public:
     return true;
   }
 
+  friend std::ostream& operator<<(std::ostream& out, const avl_array& t){
+	  for(size_type i=0;i<t.size_;i++){
+		  out<<t.key_[i]<<" ";
+	  }
+	  out<<"\n\n";
+	  std::stack<std::pair<size_type,uint>> stk;
+	  stk.push({t.root_,0});
+	  for(;stk.size()!=0;){
+		auto [next,level]=stk.top();stk.pop();
+		if(next!=t.INVALID_IDX){
+			stk.push({t.child_[next].left,level+1});
+			stk.push({t.child_[next].right,level+1});
+			for(uint i=0;i<level;i++)out<<"   ";
+			out<<"["<<t.key_[next]<<": "<<t.val_[next]<<"] "<<"\n";
+		}
+	  }
+	  return out;
+  }
 
   /////////////////////////////////////////////////////////////////////////////
   // Helper functions
@@ -529,7 +649,7 @@ private:
   // find parent element
   inline size_type get_parent(size_type node) const
   {
-    if (Fast) {
+    if constexpr (Fast) {
       return parent_[node];
     }
     else {
@@ -549,7 +669,7 @@ private:
   // set parent element (only in Fast version)
   inline void set_parent(size_type node, size_type parent)
   {
-    if (Fast) {
+    if constexpr (Fast) {
       if (node != INVALID_IDX) {
         parent_[node] = parent;
       }
